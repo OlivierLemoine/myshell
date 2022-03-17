@@ -8,7 +8,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::Print,
-    terminal::{enable_raw_mode, Clear, ClearType},
+    terminal::{enable_raw_mode, size, Clear, ClearType, ScrollDown, ScrollUp},
 };
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
@@ -17,7 +17,7 @@ fn main() -> BoxedRes<()> {
     enable_raw_mode()?;
 
     let mut must_draw = true;
-    let mut ps1 = String::from("$");
+    let mut ps1 = String::from("❯ ");
     let mut cmd = String::new();
     let mut all = String::from("Welcome !");
 
@@ -25,7 +25,7 @@ fn main() -> BoxedRes<()> {
 
     let mut cursor_position = position()?;
 
-    let print = |s: &str| {
+    let mut print = |s: &str| {
         let mut stdout = stdout();
         queue!(
             stdout,
@@ -35,7 +35,16 @@ fn main() -> BoxedRes<()> {
         )
         .unwrap();
 
+        let term_height = size().unwrap().1;
+        let cursor_height = cursor_position.1;
+        let available_space = term_height - cursor_height;
+
         for (i, l) in s.split('\n').enumerate() {
+            if i >= available_space as usize {
+                queue!(stdout, ScrollUp(1)).unwrap();
+                cursor_position.1 -= 1;
+            }
+
             if i > 0 {
                 queue!(stdout, MoveToNextLine(1)).unwrap();
             }
