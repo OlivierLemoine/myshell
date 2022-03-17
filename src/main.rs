@@ -1,9 +1,12 @@
-use std::{io::stdout, time::Duration};
+use std::{
+    io::{stdout, Write},
+    time::Duration,
+};
 
 use crossterm::{
-    cursor::{position, MoveTo, MoveToNextLine},
+    cursor::{position, EnableBlinking, MoveTo, MoveToNextLine},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
+    execute, queue,
     style::Print,
     terminal::{enable_raw_mode, Clear, ClearType},
 };
@@ -18,29 +21,35 @@ fn main() -> BoxedRes<()> {
     let mut cmd = String::new();
     let mut all = String::from("Welcome !");
 
-    execute!(
-        stdout(),
-        Print(&all),
-        Print("\r\n"),
-        MoveToNextLine(10),
-        Print(&ps1),
-    )?;
+    execute!(stdout(), Print(&all), MoveToNextLine(1))?;
 
     let mut cursor_position = position()?;
 
     let print = |s: &str| {
-        execute!(
-            stdout(),
+        let mut stdout = stdout();
+        queue!(
+            stdout,
             MoveTo(cursor_position.0, cursor_position.1),
             Clear(ClearType::FromCursorDown),
-            Print(s),
+            Print(&ps1),
         )
         .unwrap();
+
+        for (i, l) in s.split('\n').enumerate() {
+            if i > 0 {
+                queue!(stdout, MoveToNextLine(1)).unwrap();
+            }
+            queue!(stdout, Print(l)).unwrap();
+        }
+
+        queue!(stdout, EnableBlinking).unwrap();
+
+        stdout.flush().unwrap();
     };
 
     loop {
         if must_draw {
-            print(&format!("{ps1}{cmd}"));
+            print(&cmd);
             must_draw = false;
         }
 
