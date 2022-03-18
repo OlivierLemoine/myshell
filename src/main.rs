@@ -1,5 +1,8 @@
+mod builtin;
+
 use std::{
     io::{stdout, Write},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -8,24 +11,42 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::Print,
-    terminal::{enable_raw_mode, size, Clear, ClearType, ScrollDown, ScrollUp},
+    terminal::{enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
+use rlua::{Lua, Value, Variadic};
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> BoxedRes<()> {
     enable_raw_mode()?;
 
+    let lua = Lua::new();
+
+    let lua_res: BoxedRes<()> = lua.context(|lua_ctx| {
+        let globals = lua_ctx.globals();
+
+        let ls = lua_ctx.create_function(|_, path: Variadic<String>| {
+            let path = path.first().map(|v| v as &str).unwrap_or_else(|| ".");
+            Ok(builtin::ls(path))
+        })?;
+        globals.set("ls", ls)?;
+
+        Ok(())
+    });
+    lua_res?;
+
     let mut must_draw = true;
-    let mut ps1 = String::from("❯ ");
+    let ps1 = String::from("❯ ");
     let mut cmd = String::new();
-    let mut all = String::from("Welcome !");
+    let all = String::from("Welcome !");
 
     execute!(stdout(), Print(&all), MoveToNextLine(1))?;
 
-    let mut cursor_position = position()?;
+    let cursor_position = Arc::new(Mutex::new(position()?));
+    let cursor_pos = Arc::clone(&cursor_position);
 
-    let mut print = |s: &str| {
+    let print = move |s: &str| {
+        let mut cursor_position = cursor_pos.lock().unwrap();
         let mut stdout = stdout();
         queue!(
             stdout,
@@ -74,6 +95,29 @@ fn main() -> BoxedRes<()> {
                         }
 
                         must_draw = true;
+                    }
+                    (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
+                        let res: BoxedRes<String> = lua.context(|lua_ctx| {
+                            let val = lua_ctx.load(&cmd).eval::<Value>()?;
+
+                            match val {
+                                Value::Nil => Ok(String::new()),
+                                Value::Table(table) => Ok(table
+                                    .pairs()
+                                    .filter_map(|v| {
+                                        v.ok()
+                                            .map(|(k, v): (String, Value)| format!("{k}: {v:?}\n"))
+                                    })
+                                    .collect()),
+                                _ => Ok(String::new()),
+                            }
+                        });
+
+                        let res = res?;
+
+                        print(&format!("{cmd}\n{res}\n"));
+                        *cursor_position.lock().unwrap() = position()?;
+                        cmd = String::new();
                     }
                     (KeyCode::Enter, m) if m.is_empty() => {
                         cmd.push('\n');
