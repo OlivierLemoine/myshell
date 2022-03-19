@@ -1,9 +1,9 @@
 use std::{cmp::Ordering, fmt, fs};
 
 use prettytable::{Cell, Row};
-use rlua::UserData;
+use rlua::{MetaMethod, UserData};
 
-#[derive(Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct TableRes {
     header: Vec<String>,
     entries: Vec<Vec<String>>,
@@ -20,7 +20,40 @@ impl fmt::Display for TableRes {
         write!(f, "{table}")
     }
 }
-impl UserData for TableRes {}
+impl UserData for TableRes {
+    fn add_methods<'lua, T: rlua::UserDataMethods<'lua, Self>>(methods: &mut T) {
+        methods.add_meta_function(
+            MetaMethod::Index,
+            |_, (table, idx): (TableRes, rlua::Value)| {
+                Ok(match idx {
+                    rlua::Value::Integer(idx) => TableRes {
+                        header: table.header.clone(),
+                        entries: table
+                            .entries
+                            .get(idx as usize)
+                            .map(|v| vec![v.clone()])
+                            .unwrap_or(vec![]),
+                    },
+                    rlua::Value::String(col) => {
+                        let col = col.to_str()?;
+                        match table.header.iter().position(|v| v == col) {
+                            Some(idx) => TableRes {
+                                header: vec![table.header[idx].clone()],
+                                entries: table
+                                    .entries
+                                    .iter()
+                                    .map(|v| vec![v[idx].clone()])
+                                    .collect(),
+                            },
+                            None => TableRes::default(),
+                        }
+                    }
+                    _ => TableRes::default(),
+                })
+            },
+        );
+    }
+}
 
 pub fn ls(dir: &str) -> TableRes {
     let mut entries = fs::read_dir(if dir.is_empty() { "." } else { dir })
