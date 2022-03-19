@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use builtin::TableRes;
 use crossterm::{
     cursor::{position, EnableBlinking, MoveTo, MoveToNextLine},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -13,7 +14,7 @@ use crossterm::{
     style::Print,
     terminal::{enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
-use rlua::{Lua, Value, Variadic};
+use rlua::{Lua, Variadic};
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -98,19 +99,8 @@ fn main() -> BoxedRes<()> {
                     }
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
                         let res: BoxedRes<String> = lua.context(|lua_ctx| {
-                            let val = lua_ctx.load(&cmd).eval::<Value>()?;
-
-                            match val {
-                                Value::Nil => Ok(String::new()),
-                                Value::Table(table) => Ok(table
-                                    .pairs()
-                                    .filter_map(|v| {
-                                        v.ok()
-                                            .map(|(k, v): (String, Value)| format!("{k}: {v:?}\n"))
-                                    })
-                                    .collect()),
-                                _ => Ok(String::new()),
-                            }
+                            let res = lua_ctx.load(&cmd).eval::<TableRes>()?;
+                            Ok(format!("{res}"))
                         });
 
                         let res = res?;
