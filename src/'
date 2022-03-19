@@ -2,7 +2,7 @@ mod builtin;
 
 use std::{
     fs,
-    io::{stdout, Write},
+    io::{stdout, Read, Write},
     process,
     sync::{Arc, Mutex},
     time::Duration,
@@ -24,33 +24,8 @@ pub struct CmdInput {
     buffer: Vec<Vec<String>>,
 }
 impl CmdInput {
-    pub fn add_char(&mut self, c: char) {}
+    pub fn add_char() {}
     pub fn draw() {}
-}
-
-fn print(s: &str) -> BoxedRes<()> {
-    let mut stdout = stdout();
-
-    let term_height = size()?.1;
-    let cursor_height = position()?.1;
-    let available_space = term_height - cursor_height;
-
-    for (i, l) in s.split('\n').enumerate() {
-        if i >= available_space as usize {
-            queue!(stdout, ScrollUp(1))?;
-        }
-
-        if i > 0 {
-            queue!(stdout, MoveToNextLine(1))?;
-        }
-        queue!(stdout, Print(l))?;
-    }
-
-    queue!(stdout, EnableBlinking)?;
-
-    stdout.flush()?;
-
-    Ok(())
 }
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
@@ -74,16 +49,20 @@ fn main() -> BoxedRes<()> {
                                 let call_fn =
                                     lua_ctx.create_function(move |_, args: Variadic<String>| {
                                         let path = path.clone();
-                                        let output = process::Command::new(path)
+                                        let child = process::Command::new(path)
                                             .args(args.iter().collect::<Vec<_>>())
-                                            .output()
+                                            .spawn()
                                             .unwrap();
 
-                                        let stdout = String::from_utf8(output.stdout).unwrap();
-                                        let stderr = String::from_utf8(output.stderr).unwrap();
-                                        let output = format!("{stdout}\n{stderr}");
+                                        let res = child.wait_with_output().unwrap();
+                                        let stdout = String::from_utf8(res.stdout).unwrap();
+                                        let stderr = String::from_utf8(res.stderr).unwrap();
+                                        let output = format!("{stdout}{stderr}");
 
-                                        Ok(output)
+                                        Ok(TableRes {
+                                            header: vec!["stdout".to_string()],
+                                            entries: vec![vec![output]],
+                                        })
                                     })?;
                                 globals.set(name, call_fn)?;
 
@@ -97,7 +76,7 @@ fn main() -> BoxedRes<()> {
         }
     }
 
-    lua.context::<_, BoxedRes<()>>(|lua_ctx| {
+    let lua_res: BoxedRes<()> = lua.context(|lua_ctx| {
         let globals = lua_ctx.globals();
 
         let ls = lua_ctx.create_function(|_, path: Variadic<String>| {
@@ -106,14 +85,9 @@ fn main() -> BoxedRes<()> {
         })?;
         globals.set("ls", ls)?;
 
-        let cd = lua_ctx.create_function(|_, path: Variadic<String>| {
-            let path = path.first().map(|v| v as &str).unwrap_or_else(|| "");
-            Ok(builtin::cd(path))
-        })?;
-        globals.set("cd", cd)?;
-
         Ok(())
-    })?;
+    });
+    lua_res?;
 
     let mut must_draw = true;
     let ps1 = String::from("❯ ");
@@ -125,7 +99,7 @@ fn main() -> BoxedRes<()> {
     let cursor_position = Arc::new(Mutex::new(position()?));
     let cursor_pos = Arc::clone(&cursor_position);
 
-    let print_cmd = move |s: &str| {
+    let print = move |s: &str| {
         let mut cursor_position = cursor_pos.lock().unwrap();
         let mut stdout = stdout();
         queue!(
@@ -159,7 +133,7 @@ fn main() -> BoxedRes<()> {
 
     loop {
         if must_draw {
-            print_cmd(&cmd);
+            print(&cmd);
             must_draw = false;
         }
 
@@ -177,29 +151,16 @@ fn main() -> BoxedRes<()> {
                         must_draw = true;
                     }
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
-                        let res = lua.context::<_, BoxedRes<String>>(|lua_ctx| {
-                            Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
-                                rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
-                                    Ok(table) => table.to_string(),
-                                    Err(_) => String::new(),
-                                },
-                                rlua::Value::String(s) => s.to_str()?.to_string(),
-                                rlua::Value::Error(err) => TableRes {
-                                    header: vec!["Error".to_string()],
-                                    entries: vec![vec![err.to_string()]],
-                                }
-                                .to_string(),
-                                _ => String::new(),
-                            })
-                        })?;
+                        let res: BoxedRes<String> = lua.context(|lua_ctx| {
+                            let res = lua_ctx.load(&cmd).eval::<TableRes>()?;
+                            Ok(format!("{res}"))
+                        });
 
-                        print("\n")?;
-                        print(&res)?;
-                        print("\n")?;
+                        let res = res?;
 
+                        print(&format!("{cmd}\n{res}\n"));
                         *cursor_position.lock().unwrap() = position()?;
                         cmd = String::new();
-                        must_draw = true;
                     }
                     (KeyCode::Enter, m) if m.is_empty() => {
                         cmd.push('\n');
