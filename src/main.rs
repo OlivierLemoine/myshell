@@ -1,7 +1,9 @@
 mod builtin;
 
 use std::{
-    io::{stdout, Write},
+    fs,
+    io::{stdout, Read, Write},
+    process,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,6 +16,7 @@ use crossterm::{
     style::Print,
     terminal::{enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
+use is_executable::IsExecutable;
 use rlua::{Lua, Variadic};
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
@@ -22,6 +25,47 @@ fn main() -> BoxedRes<()> {
     enable_raw_mode()?;
 
     let lua = Lua::new();
+
+    for path in env!("PATH").split(':') {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let path = entry.path();
+                        if path.is_executable() {
+                            let lua_res: BoxedRes<()> = lua.context(move |lua_ctx| {
+                                let path = path;
+                                let globals = lua_ctx.globals();
+
+                                let call_fn =
+                                    lua_ctx.create_function(move |_, args: Variadic<String>| {
+                                        let path = path.clone();
+                                        let child = process::Command::new(path)
+                                            .args(args.iter().collect::<Vec<_>>())
+                                            .spawn()
+                                            .unwrap();
+
+                                        let res = child.wait_with_output().unwrap();
+                                        let stdout = String::from_utf8(res.stdout).unwrap();
+                                        let stderr = String::from_utf8(res.stderr).unwrap();
+                                        let output = format!("{stdout}{stderr}");
+
+                                        Ok(TableRes {
+                                            header: vec!["stdout".to_string()],
+                                            entries: vec![vec![output]],
+                                        })
+                                    })?;
+                                globals.set(name, call_fn)?;
+
+                                Ok(())
+                            });
+                            lua_res?;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let lua_res: BoxedRes<()> = lua.context(|lua_ctx| {
         let globals = lua_ctx.globals();

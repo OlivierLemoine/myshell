@@ -5,8 +5,8 @@ use rlua::{MetaMethod, UserData};
 
 #[derive(Debug, Default, Clone)]
 pub struct TableRes {
-    header: Vec<String>,
-    entries: Vec<Vec<String>>,
+    pub header: Vec<String>,
+    pub entries: Vec<Vec<String>>,
 }
 impl fmt::Display for TableRes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -81,7 +81,7 @@ pub fn ls(dir: &str) -> TableRes {
     });
 
     TableRes {
-        header: vec!["Type".to_string(), "Name".to_string()],
+        header: vec!["type".to_string(), "name".to_string()],
         entries,
     }
 }
