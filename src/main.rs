@@ -215,7 +215,7 @@ fn main() -> BoxedRes<()> {
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
                         print("\n")?;
 
-                        let res = lua.context::<_, BoxedRes<String>>(|lua_ctx| {
+                        match lua.context::<_, BoxedRes<String>>(|lua_ctx| {
                             Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
                                 rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
                                     Ok(table) => table.to_string(),
@@ -229,14 +229,21 @@ fn main() -> BoxedRes<()> {
                                 .to_string(),
                                 _ => String::new(),
                             })
-                        })?;
+                        }) {
+                            Ok(res) => {
+                                print(&res)?;
+                                print("\n")?;
 
-                        print(&res)?;
-                        print("\n")?;
-
-                        *cursor_position.lock().unwrap() = position()?;
-                        cmd = String::new();
-                        must_draw = true;
+                                *cursor_position.lock().unwrap() = position()?;
+                                cmd = String::new();
+                                must_draw = true;
+                            }
+                            Err(e) => {
+                                print(&e.to_string())?;
+                                print("\n")?;
+                                must_draw = true;
+                            }
+                        }
                     }
                     (KeyCode::Enter, m) if m.is_empty() => {
                         cmd.push('\n');
