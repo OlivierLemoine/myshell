@@ -13,7 +13,7 @@ use builtin::TableRes;
 use crossterm::{
     cursor::{position, EnableBlinking, MoveTo, MoveToNextLine},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute, queue,
+    queue,
     style::Print,
     terminal::{enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
@@ -76,33 +76,46 @@ fn main() -> BoxedRes<()> {
                                         let mut child_stdout = child.stdout.take().unwrap();
                                         let mut child_stderr = child.stderr.take().unwrap();
 
-                                        loop {
-                                            match child.try_wait() {
-                                                Ok(None) => {
-                                                    let mut buff = String::new();
-                                                    child_stdout.read_to_string(&mut buff).unwrap();
-                                                    print(&buff).unwrap();
+                                        //loop {
+                                        //    match child.try_wait() {
+                                        //        Ok(None) => {
+                                        //            let mut buff = String::new();
+                                        //            child_stdout.read_to_string(&mut buff).unwrap();
+                                        //            print(&buff).unwrap();
 
-                                                    let mut buff = String::new();
-                                                    child_stderr.read_to_string(&mut buff).unwrap();
-                                                    print(&buff).unwrap();
+                                        //            let mut buff = String::new();
+                                        //            child_stderr.read_to_string(&mut buff).unwrap();
+                                        //            print(&buff).unwrap();
 
-                                                    thread::sleep(Duration::from_millis(100));
-                                                }
-                                                Ok(Some(_)) => {
-                                                    break;
-                                                }
-                                                Err(_) => {
-                                                    break;
-                                                }
-                                            }
-                                        }
+                                        //            thread::sleep(Duration::from_millis(100));
+                                        //        }
+                                        //        Ok(Some(_)) => {
+                                        //            break;
+                                        //        }
+                                        //        Err(_) => {
+                                        //            break;
+                                        //        }
+                                        //    }
+                                        //}
+                                        //let mut buff = String::new();
+                                        //child_stdout.read_to_string(&mut buff).unwrap();
+                                        //print(&buff).unwrap();
 
-                                        let mut buff = String::new();
-                                        child_stdout.read_to_string(&mut buff).unwrap();
-                                        print(&buff).unwrap();
+                                        child.wait().unwrap();
 
-                                        Ok(())
+                                        let mut stdout = String::new();
+                                        let mut stderr = String::new();
+                                        child_stdout.read_to_string(&mut stdout).unwrap();
+                                        child_stderr.read_to_string(&mut stderr).unwrap();
+                                        stdout = stdout.trim().to_string();
+                                        stderr = stderr.trim().to_string();
+
+                                        Ok(match (stdout.len(), stderr.len()) {
+                                            (0, 0) => String::new(),
+                                            (_, 0) => stdout,
+                                            (0, _) => stderr,
+                                            _ => format!("{stdout}\n{stderr}"),
+                                        })
                                     })?;
                                 globals.set(name, call_fn)?;
 
@@ -151,12 +164,20 @@ fn main() -> BoxedRes<()> {
         Ok(())
     })?;
 
+    let init_code_path = home::home_dir().map(|mut p| {
+        p.push(".config/myshell/init.lua");
+        p
+    });
+    if let Some(init_code) = init_code_path.and_then(|p| fs::read_to_string(p).ok()) {
+        lua.context::<_, BoxedRes<()>>(|lua_ctx| {
+            lua_ctx.load(&init_code).exec()?;
+            Ok(())
+        })?;
+    }
+
     let mut must_draw = true;
     let ps1 = String::from("❯ ");
     let mut cmd = String::new();
-    let all = String::from("Welcome !");
-
-    execute!(stdout(), Print(&all), MoveToNextLine(1))?;
 
     let cursor_position = Arc::new(Mutex::new(position()?));
     let cursor_pos = Arc::clone(&cursor_position);
@@ -227,7 +248,7 @@ fn main() -> BoxedRes<()> {
                                     entries: vec![vec![err.to_string()]],
                                 }
                                 .to_string(),
-                                _ => String::new(),
+                                x => format!("[[ {} ]]", x.type_name()),
                             })
                         }) {
                             Ok(res) => {

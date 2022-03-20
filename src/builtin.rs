@@ -1,11 +1,4 @@
-use std::{
-    cmp::Ordering,
-    env::{self, home_dir},
-    fmt, fs,
-    path::PathBuf,
-    str::FromStr,
-    vec,
-};
+use std::{cmp::Ordering, env, fmt, fs, path::PathBuf, str::FromStr, vec};
 
 use prettytable::{Cell, Row};
 use rlua::{MetaMethod, UserData};
@@ -101,7 +94,7 @@ pub fn ls(dir: &str) -> TableRes {
 
 pub fn cd(dir: &str) -> TableRes {
     if let Some(path) = if dir.is_empty() {
-        home_dir().or_else(|| env::current_dir().ok())
+        home::home_dir().or_else(|| env::current_dir().ok())
     } else {
         PathBuf::from_str(dir).ok()
     } {
