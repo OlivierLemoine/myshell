@@ -2,9 +2,10 @@ mod builtin;
 
 use std::{
     fs,
-    io::{stdout, Write},
-    process,
+    io::{stdout, Read, Write},
+    process::{self, Stdio},
     sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 
@@ -18,15 +19,6 @@ use crossterm::{
 };
 use is_executable::IsExecutable;
 use rlua::{Lua, Variadic};
-
-pub struct CmdInput {
-    position: (u16, u16),
-    buffer: Vec<Vec<String>>,
-}
-impl CmdInput {
-    pub fn add_char(&mut self, c: char) {}
-    pub fn draw() {}
-}
 
 fn print(s: &str) -> BoxedRes<()> {
     let mut stdout = stdout();
@@ -74,16 +66,43 @@ fn main() -> BoxedRes<()> {
                                 let call_fn =
                                     lua_ctx.create_function(move |_, args: Variadic<String>| {
                                         let path = path.clone();
-                                        let output = process::Command::new(path)
+                                        let mut child = process::Command::new(path)
                                             .args(args.iter().collect::<Vec<_>>())
-                                            .output()
+                                            .stdout(Stdio::piped())
+                                            .stderr(Stdio::piped())
+                                            .spawn()
                                             .unwrap();
 
-                                        let stdout = String::from_utf8(output.stdout).unwrap();
-                                        let stderr = String::from_utf8(output.stderr).unwrap();
-                                        let output = format!("{stdout}\n{stderr}");
+                                        let mut child_stdout = child.stdout.take().unwrap();
+                                        let mut child_stderr = child.stderr.take().unwrap();
 
-                                        Ok(output)
+                                        loop {
+                                            match child.try_wait() {
+                                                Ok(None) => {
+                                                    let mut buff = String::new();
+                                                    child_stdout.read_to_string(&mut buff).unwrap();
+                                                    print(&buff).unwrap();
+
+                                                    let mut buff = String::new();
+                                                    child_stderr.read_to_string(&mut buff).unwrap();
+                                                    print(&buff).unwrap();
+
+                                                    thread::sleep(Duration::from_millis(100));
+                                                }
+                                                Ok(Some(_)) => {
+                                                    break;
+                                                }
+                                                Err(_) => {
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        let mut buff = String::new();
+                                        child_stdout.read_to_string(&mut buff).unwrap();
+                                        print(&buff).unwrap();
+
+                                        Ok(())
                                     })?;
                                 globals.set(name, call_fn)?;
 
@@ -111,6 +130,23 @@ fn main() -> BoxedRes<()> {
             Ok(builtin::cd(path))
         })?;
         globals.set("cd", cd)?;
+
+        let print = lua_ctx.create_function(|_, s: String| {
+            print(&s).unwrap();
+            Ok(())
+        })?;
+        globals.set("__internal_print", print)?;
+
+        lua_ctx
+            .load(
+                "function print(...)
+                    for i = 1, select('#', ...) do
+                        __internal_print(tostring(select(i, ...)))
+                    end
+                end",
+            )
+            .exec()
+            .unwrap();
 
         Ok(())
     })?;
@@ -177,6 +213,8 @@ fn main() -> BoxedRes<()> {
                         must_draw = true;
                     }
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
+                        print("\n")?;
+
                         let res = lua.context::<_, BoxedRes<String>>(|lua_ctx| {
                             Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
                                 rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
@@ -193,7 +231,6 @@ fn main() -> BoxedRes<()> {
                             })
                         })?;
 
-                        print("\n")?;
                         print(&res)?;
                         print("\n")?;
 

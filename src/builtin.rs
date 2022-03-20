@@ -3,7 +3,6 @@ use std::{
     env::{self, home_dir},
     fmt, fs,
     path::PathBuf,
-    process,
     str::FromStr,
     vec,
 };
@@ -38,7 +37,7 @@ impl UserData for TableRes {
                         header: table.header.clone(),
                         entries: table
                             .entries
-                            .get(idx as usize)
+                            .get(idx as usize + 1)
                             .map(|v| vec![v.clone()])
                             .unwrap_or(vec![]),
                     },
@@ -60,6 +59,12 @@ impl UserData for TableRes {
                 })
             },
         );
+        methods.add_meta_function(MetaMethod::ToString, |_, table: TableRes| {
+            Ok(table.to_string())
+        });
+        methods.add_meta_function(MetaMethod::Len, |_, table: TableRes| {
+            Ok(table.entries.len())
+        });
     }
 }
 
