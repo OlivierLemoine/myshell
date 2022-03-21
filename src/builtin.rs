@@ -102,7 +102,11 @@ pub fn cd(dir: &str) -> TableRes {
 
         TableRes {
             header: vec!["dir".to_string()],
-            entries: vec![vec![path.to_str().unwrap().to_string()]],
+            entries: vec![vec![env::current_dir()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()]],
         }
     } else {
         TableRes::default()

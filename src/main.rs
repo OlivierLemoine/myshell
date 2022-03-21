@@ -5,7 +5,6 @@ use std::{
     io::{stdout, Read, Write},
     process::{self, Stdio},
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
 
@@ -15,10 +14,10 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     queue,
     style::Print,
-    terminal::{enable_raw_mode, size, Clear, ClearType, ScrollUp},
+    terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
 use is_executable::IsExecutable;
-use rlua::{Lua, Variadic};
+use rlua::{Lua, ToLua, Variadic};
 
 fn print(s: &str) -> BoxedRes<()> {
     let mut stdout = stdout();
@@ -50,7 +49,12 @@ type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
 fn main() -> BoxedRes<()> {
     enable_raw_mode()?;
 
+    let query =
+        tree_sitter::Query::new(tree_sitter_lua::language(), "(assignment_statement)").unwrap();
+
     let lua = Lua::new();
+
+    let should_tty = Arc::new(Mutex::new(false));
 
     for path in env!("PATH").split(':') {
         if let Ok(entries) = fs::read_dir(path) {
@@ -59,64 +63,53 @@ fn main() -> BoxedRes<()> {
                     if let Some(name) = entry.file_name().to_str() {
                         let path = entry.path();
                         if path.is_executable() {
+                            let should_tty = Arc::clone(&should_tty);
                             let lua_res: BoxedRes<()> = lua.context(move |lua_ctx| {
                                 let path = path;
                                 let globals = lua_ctx.globals();
 
-                                let call_fn =
-                                    lua_ctx.create_function(move |_, args: Variadic<String>| {
+                                let call_fn = lua_ctx.create_function(
+                                    move |lua_ctx, args: Variadic<String>| {
                                         let path = path.clone();
-                                        let mut child = process::Command::new(path)
-                                            .args(args.iter().collect::<Vec<_>>())
-                                            .stdout(Stdio::piped())
-                                            .stderr(Stdio::piped())
-                                            .spawn()
-                                            .unwrap();
 
-                                        let mut child_stdout = child.stdout.take().unwrap();
-                                        let mut child_stderr = child.stderr.take().unwrap();
+                                        let mut cmd = process::Command::new(&path);
+                                        cmd.args(args.iter().collect::<Vec<_>>());
 
-                                        //loop {
-                                        //    match child.try_wait() {
-                                        //        Ok(None) => {
-                                        //            let mut buff = String::new();
-                                        //            child_stdout.read_to_string(&mut buff).unwrap();
-                                        //            print(&buff).unwrap();
+                                        let should_tty = *should_tty.lock().unwrap();
 
-                                        //            let mut buff = String::new();
-                                        //            child_stderr.read_to_string(&mut buff).unwrap();
-                                        //            print(&buff).unwrap();
+                                        if should_tty {
+                                            disable_raw_mode().unwrap();
+                                            cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+                                        } else {
+                                            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+                                        }
 
-                                        //            thread::sleep(Duration::from_millis(100));
-                                        //        }
-                                        //        Ok(Some(_)) => {
-                                        //            break;
-                                        //        }
-                                        //        Err(_) => {
-                                        //            break;
-                                        //        }
-                                        //    }
-                                        //}
-                                        //let mut buff = String::new();
-                                        //child_stdout.read_to_string(&mut buff).unwrap();
-                                        //print(&buff).unwrap();
+                                        let output =
+                                            cmd.spawn().unwrap().wait_with_output().unwrap();
 
-                                        child.wait().unwrap();
-
-                                        let mut stdout = String::new();
-                                        let mut stderr = String::new();
-                                        child_stdout.read_to_string(&mut stdout).unwrap();
-                                        child_stderr.read_to_string(&mut stderr).unwrap();
-                                        stdout = stdout.trim().to_string();
-                                        stderr = stderr.trim().to_string();
-
-                                        Ok(match (stdout.len(), stderr.len()) {
-                                            (0, 0) => String::new(),
-                                            (_, 0) => stdout,
-                                            (0, _) => stderr,
-                                            _ => format!("{stdout}\n{stderr}"),
+                                        Ok(if !should_tty {
+                                            TableRes {
+                                                header: vec![
+                                                    "path".to_string(),
+                                                    "code".to_string(),
+                                                    "stdout".to_string(),
+                                                    "stderr".to_string(),
+                                                ],
+                                                entries: vec![vec![
+                                                    path.to_str().unwrap().to_string(),
+                                                    output.status.code().unwrap_or(-1).to_string(),
+                                                    String::from_utf8(output.stdout).unwrap(),
+                                                    String::from_utf8(output.stderr).unwrap(),
+                                                ]],
+                                            }
+                                            .to_lua(lua_ctx)
+                                            .unwrap()
+                                        } else {
+                                            enable_raw_mode().unwrap();
+                                            rlua::Value::Nil
                                         })
-                                    })?;
+                                    },
+                                )?;
                                 globals.set(name, call_fn)?;
 
                                 Ok(())
@@ -236,6 +229,32 @@ fn main() -> BoxedRes<()> {
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
                         print("\n")?;
 
+                        let code = cmd.trim();
+
+                        let mut parser = tree_sitter::Parser::new();
+                        parser.set_language(tree_sitter_lua::language())?;
+                        let tree = parser
+                            .parse(&code, None)
+                            .ok_or_else(|| format!("Can't parse lua code : {code}"))?;
+                        let node = tree.root_node();
+
+                        let print_tty = if node.child_count() <= 1 {
+                            let mut query_cursor = tree_sitter::QueryCursor::new();
+                            if query_cursor
+                                .matches(&query, tree.root_node(), |_| "")
+                                .count()
+                                == 0
+                            {
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        *should_tty.lock().unwrap() = print_tty;
+
                         match lua.context::<_, BoxedRes<String>>(|lua_ctx| {
                             Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
                                 rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
@@ -248,7 +267,7 @@ fn main() -> BoxedRes<()> {
                                     entries: vec![vec![err.to_string()]],
                                 }
                                 .to_string(),
-                                x => format!("[[ {} ]]", x.type_name()),
+                                _ => String::new(),
                             })
                         }) {
                             Ok(res) => {
