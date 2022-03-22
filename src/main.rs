@@ -98,8 +98,14 @@ fn main() -> BoxedRes<()> {
                                                 entries: vec![vec![
                                                     path.to_str().unwrap().to_string(),
                                                     output.status.code().unwrap_or(-1).to_string(),
-                                                    String::from_utf8(output.stdout).unwrap(),
-                                                    String::from_utf8(output.stderr).unwrap(),
+                                                    std::str::from_utf8(&output.stdout)
+                                                        .unwrap()
+                                                        .trim()
+                                                        .to_string(),
+                                                    std::str::from_utf8(&output.stderr)
+                                                        .unwrap()
+                                                        .trim()
+                                                        .to_string(),
                                                 ]],
                                             }
                                             .to_lua(lua_ctx)

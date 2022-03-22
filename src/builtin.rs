@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, env, fmt, fs, path::PathBuf, str::FromStr, vec};
 
 use prettytable::{Cell, Row};
-use rlua::{MetaMethod, UserData};
+use rlua::{MetaMethod, ToLua, UserData};
 
 #[derive(Debug, Default, Clone)]
 pub struct TableRes {
@@ -24,32 +24,35 @@ impl UserData for TableRes {
     fn add_methods<'lua, T: rlua::UserDataMethods<'lua, Self>>(methods: &mut T) {
         methods.add_meta_function(
             MetaMethod::Index,
-            |_, (table, idx): (TableRes, rlua::Value)| {
-                Ok(match idx {
-                    rlua::Value::Integer(idx) => TableRes {
+            |lua_ctx, (table, idx): (TableRes, rlua::Value)| match idx {
+                rlua::Value::Integer(idx) => match table.header.len() {
+                    0 => Ok(rlua::Value::Nil),
+                    1 => table.entries[idx as usize - 1][0].clone().to_lua(lua_ctx),
+                    _ => TableRes {
                         header: table.header.clone(),
                         entries: table
                             .entries
-                            .get(idx as usize + 1)
+                            .get(idx as usize - 1)
                             .map(|v| vec![v.clone()])
                             .unwrap_or(vec![]),
-                    },
-                    rlua::Value::String(col) => {
-                        let col = col.to_str()?;
-                        match table.header.iter().position(|v| v == col) {
-                            Some(idx) => TableRes {
-                                header: vec![table.header[idx].clone()],
-                                entries: table
-                                    .entries
-                                    .iter()
-                                    .map(|v| vec![v[idx].clone()])
-                                    .collect(),
-                            },
-                            None => TableRes::default(),
-                        }
                     }
-                    _ => TableRes::default(),
-                })
+                    .to_lua(lua_ctx),
+                },
+                rlua::Value::String(col) => {
+                    let col = col.to_str()?;
+                    match table.header.iter().position(|v| v == col) {
+                        Some(idx) if table.entries.len() == 1 => {
+                            table.entries[0][idx].clone().to_lua(lua_ctx)
+                        }
+                        Some(idx) => TableRes {
+                            header: vec![table.header[idx].clone()],
+                            entries: table.entries.iter().map(|v| vec![v[idx].clone()]).collect(),
+                        }
+                        .to_lua(lua_ctx),
+                        None => Ok(rlua::Value::Nil),
+                    }
+                }
+                _ => Ok(rlua::Value::Nil),
             },
         );
         methods.add_meta_function(MetaMethod::ToString, |_, table: TableRes| {
