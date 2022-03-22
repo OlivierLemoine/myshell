@@ -264,7 +264,12 @@ fn main() -> BoxedRes<()> {
                         match lua.context::<_, BoxedRes<String>>(|lua_ctx| {
                             Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
                                 rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
-                                    Ok(table) => table.to_string(),
+                                    Ok(table) => {
+                                        disable_raw_mode()?;
+                                        table.as_display_table().print_tty(true);
+                                        enable_raw_mode()?;
+                                        String::new()
+                                    }
                                     Err(_) => String::new(),
                                 },
                                 rlua::Value::String(s) => s.to_str()?.to_string(),

@@ -8,14 +8,26 @@ pub struct TableRes {
     pub header: Vec<String>,
     pub entries: Vec<Vec<String>>,
 }
-impl fmt::Display for TableRes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl TableRes {
+    pub fn as_display_table(&self) -> prettytable::Table {
         let mut table = prettytable::Table::new();
-        table.set_format(*prettytable::format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
-        table.set_titles(Row::new(self.header.iter().map(|v| Cell::new(v)).collect()));
+        table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
+        table.set_titles(Row::new(
+            self.header
+                .iter()
+                .map(|v| Cell::new(v).style_spec("biuc"))
+                .collect(),
+        ));
         for entry in &self.entries {
             table.add_row(Row::new(entry.iter().map(|v| Cell::new(v)).collect()));
         }
+
+        table
+    }
+}
+impl fmt::Display for TableRes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let table = self.as_display_table();
 
         write!(f, "{table}")
     }
@@ -40,17 +52,24 @@ impl UserData for TableRes {
                 },
                 rlua::Value::String(col) => {
                     let col = col.to_str()?;
-                    match table.header.iter().position(|v| v == col) {
-                        Some(idx) if table.entries.len() == 1 => {
-                            table.entries[0][idx].clone().to_lua(lua_ctx)
-                        }
-                        Some(idx) => TableRes {
-                            header: vec![table.header[idx].clone()],
-                            entries: table.entries.iter().map(|v| vec![v[idx].clone()]).collect(),
-                        }
-                        .to_lua(lua_ctx),
-                        None => Ok(rlua::Value::Nil),
-                    }
+
+                    table
+                        .header
+                        .iter()
+                        .position(|v| v == col)
+                        .map(|idx| {
+                            table
+                                .entries
+                                .iter()
+                                .map(move |v| v[idx].clone())
+                                .enumerate()
+                        })
+                        .map(|it| {
+                            lua_ctx
+                                .create_table_from(it)
+                                .and_then(|v| v.to_lua(lua_ctx))
+                        })
+                        .unwrap_or_else(|| lua_ctx.create_table().and_then(|v| v.to_lua(lua_ctx)))
                 }
                 _ => Ok(rlua::Value::Nil),
             },
