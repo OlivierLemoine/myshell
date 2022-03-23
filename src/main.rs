@@ -65,8 +65,15 @@ impl Default for Command {
     }
 }
 impl Command {
-    fn draw(&mut self) -> BoxedRes<()> {
+    fn draw(&mut self, lua: &Lua) -> BoxedRes<()> {
         if self.redraw {
+            self.ps1 = lua.context(|lua_ctx| {
+                let globals = lua_ctx.globals();
+                let config = globals.get::<_, rlua::Table>("config")?;
+                let ps1 = config.get::<_, rlua::Function>("ps1")?;
+                ps1.call::<_, String>(())
+            })?;
+
             let mut stdout = stdout();
             queue!(
                 stdout,
@@ -358,6 +365,13 @@ fn main() -> BoxedRes<()> {
     });
     if let Some(init_code) = init_code_path.and_then(|p| fs::read_to_string(p).ok()) {
         lua.context::<_, BoxedRes<()>>(|lua_ctx| {
+            lua_ctx
+                .load(
+                    r#"config = {
+                    ps1 = function() return "$ " end
+                }"#,
+                )
+                .exec()?;
             lua_ctx.load(&init_code).exec()?;
             Ok(())
         })?;
@@ -367,7 +381,7 @@ fn main() -> BoxedRes<()> {
     let mut cmd = Command::default();
 
     loop {
-        cmd.draw()?;
+        cmd.draw(&lua)?;
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
