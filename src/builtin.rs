@@ -37,19 +37,21 @@ impl UserData for TableRes {
         methods.add_meta_function(
             MetaMethod::Index,
             |lua_ctx, (table, idx): (TableRes, rlua::Value)| match idx {
-                rlua::Value::Integer(idx) => match table.header.len() {
-                    0 => Ok(rlua::Value::Nil),
-                    1 => table.entries[idx as usize - 1][0].clone().to_lua(lua_ctx),
-                    _ => TableRes {
-                        header: table.header.clone(),
-                        entries: table
-                            .entries
-                            .get(idx as usize - 1)
-                            .map(|v| vec![v.clone()])
-                            .unwrap_or(vec![]),
-                    }
-                    .to_lua(lua_ctx),
-                },
+                rlua::Value::Integer(idx) => table
+                    .entries
+                    .get(idx as usize - 1)
+                    .map(|v| {
+                        lua_ctx
+                            .create_table_from(
+                                table
+                                    .header
+                                    .iter()
+                                    .zip(v.iter())
+                                    .map(|(k, v)| (k.clone(), v.clone())),
+                            )
+                            .and_then(|v| v.to_lua(lua_ctx))
+                    })
+                    .unwrap_or_else(|| lua_ctx.create_table().and_then(|v| v.to_lua(lua_ctx))),
                 rlua::Value::String(col) => {
                     let col = col.to_str()?;
 

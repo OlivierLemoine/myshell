@@ -2,7 +2,7 @@ mod builtin;
 
 use std::{
     fs,
-    io::{stdout, Read, Write},
+    io::{stdout, Write},
     process::{self, Stdio},
     sync::{Arc, Mutex},
     time::Duration,
@@ -272,6 +272,39 @@ fn main() -> BoxedRes<()> {
                                     }
                                     Err(_) => String::new(),
                                 },
+                                rlua::Value::Table(table) => {
+                                    let mut t = prettytable::Table::new();
+                                    t.set_format(*prettytable::format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+                                    table
+                                        .pairs::<rlua::Value, rlua::Value>()
+                                        .filter_map(|pair| pair.ok())
+                                        .filter_map(|(key, value)| match (key, value) {
+                                            (rlua::Value::Integer(_), rlua::Value::String(s)) => s
+                                                .to_str()
+                                                .map(|v| {
+                                                    prettytable::Row::new(vec![
+                                                        prettytable::Cell::new(v),
+                                                    ])
+                                                })
+                                                .ok(),
+                                            (rlua::Value::String(k), rlua::Value::String(s)) => k
+                                                .to_str()
+                                                .and_then(|k| s.to_str().map(|v| (k, v)))
+                                                .map(|(k, v)| {
+                                                    prettytable::Row::new(vec![
+                                                        prettytable::Cell::new(k),
+                                                        prettytable::Cell::new(v),
+                                                    ])
+                                                })
+                                                .ok(),
+                                            (a, b) => unimplemented!("{a:?} {b:?}"),
+                                        })
+                                        .for_each(|r| {
+                                            t.add_row(r);
+                                        });
+
+                                    t.to_string()
+                                }
                                 rlua::Value::String(s) => s.to_str()?.to_string(),
                                 rlua::Value::Error(err) => TableRes {
                                     header: vec!["Error".to_string()],
