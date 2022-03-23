@@ -10,7 +10,7 @@ use std::{
 
 use builtin::TableRes;
 use crossterm::{
-    cursor::{position, EnableBlinking, MoveTo, MoveToNextLine},
+    cursor::{position, EnableBlinking, MoveTo, MoveToNextLine, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     queue,
     style::Print,
@@ -45,6 +45,195 @@ fn print(s: &str) -> BoxedRes<()> {
 }
 
 type BoxedRes<T> = Result<T, Box<dyn std::error::Error>>;
+
+struct Command {
+    cmd: Vec<String>,
+    cursor_initial: (u16, u16),
+    cursor: (usize, usize),
+    redraw: bool,
+    ps1: String,
+}
+impl Default for Command {
+    fn default() -> Self {
+        Command {
+            cmd: vec![String::new()],
+            cursor_initial: position().unwrap(),
+            cursor: (0, 0),
+            redraw: true,
+            ps1: "$ ".to_string(),
+        }
+    }
+}
+impl Command {
+    fn draw(&mut self) -> BoxedRes<()> {
+        if self.redraw {
+            let mut stdout = stdout();
+            queue!(
+                stdout,
+                MoveTo(self.cursor_initial.0, self.cursor_initial.1),
+                Clear(ClearType::FromCursorDown),
+                Print(&self.ps1),
+            )?;
+
+            let mut after_ps1 = position()?;
+
+            let term_height = size()?.1;
+            let cursor_height = self.cursor_initial.1;
+            let available_space = term_height - cursor_height;
+
+            for (i, l) in self.cmd.iter().enumerate() {
+                if i >= available_space as usize {
+                    queue!(stdout, ScrollUp(1))?;
+                    self.cursor_initial.1 -= 1;
+                    after_ps1.1 -= 1;
+                }
+
+                if i > 0 {
+                    queue!(stdout, MoveToNextLine(1))?;
+                }
+                queue!(stdout, Print(l)).unwrap();
+            }
+
+            if self.cursor.1 == 0 {
+                queue!(
+                    stdout,
+                    MoveTo(after_ps1.0 + self.cursor.0 as u16, after_ps1.1),
+                )?;
+            } else {
+                queue!(
+                    stdout,
+                    MoveTo(self.cursor.0 as u16, after_ps1.1 + self.cursor.1 as u16),
+                )?;
+            }
+
+            queue!(stdout, Show)?;
+
+            stdout.flush()?;
+
+            self.redraw = false;
+        }
+
+        Ok(())
+    }
+
+    fn reset_cursor_initial(&mut self) {
+        self.cursor_initial = position().unwrap();
+        self.redraw = true;
+    }
+
+    fn code(&self) -> String {
+        self.cmd.join("\n")
+    }
+
+    fn add_char(&mut self, c: char) {
+        match c {
+            '\r' => {}
+            '\n' => {
+                let (line, new_line) = self.cmd[self.cursor.1].split_at(self.cursor.0);
+                let new_line = new_line.to_string();
+                let line = line.to_string();
+                self.cmd[self.cursor.1] = line;
+                self.cursor = (0, self.cursor.1 + 1);
+                self.cmd.insert(self.cursor.1, new_line);
+            }
+            c => {
+                self.cmd[self.cursor.1].insert(self.cursor.0, c);
+                self.cursor.0 += 1;
+            }
+        }
+
+        self.redraw = true;
+    }
+
+    fn remove_char(&mut self) {
+        match self.cursor.0 {
+            0 if self.cursor.1 > 0 => {
+                let line = self.cmd.remove(self.cursor.1);
+                self.cursor.1 -= 1;
+                self.cursor.0 = self.cmd[self.cursor.1].len();
+                self.cmd[self.cursor.1].extend(line.chars());
+
+                self.redraw = true;
+            }
+            0 => {
+                // Nothing
+            }
+            x => {
+                self.cmd[self.cursor.1].remove(x - 1);
+                self.cursor.0 -= 1;
+
+                self.redraw = true;
+            }
+        }
+    }
+
+    fn left(&mut self) -> bool {
+        match self.cursor.0 {
+            0 => {
+                // Nothing
+                false
+            }
+            _ => {
+                self.cursor.0 -= 1;
+                self.redraw = true;
+                true
+            }
+        }
+    }
+
+    fn right(&mut self, wrapping: bool) -> bool {
+        match self.cursor.0 {
+            x if x == self.cmd[self.cursor.1].len() => {
+                if wrapping {
+                    if self.down() {
+                        self.cursor.0 = 0;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Nothing
+                    false
+                }
+            }
+            _ => {
+                self.cursor.0 += 1;
+                self.redraw = true;
+                true
+            }
+        }
+    }
+
+    fn up(&mut self) -> bool {
+        match self.cursor.0 {
+            0 => {
+                // Nothing
+                false
+            }
+            _ => {
+                self.cursor.1 -= 1;
+                self.cursor.0 = self.cursor.0.min(self.cmd[self.cursor.1].len());
+                self.redraw = true;
+                true
+            }
+        }
+    }
+
+    fn down(&mut self) -> bool {
+        match self.cursor.1 {
+            x if x < self.cmd.len() - 1 => {
+                self.cursor.1 += 1;
+                self.cursor.0 = self.cursor.0.min(self.cmd[self.cursor.1].len());
+                self.redraw = true;
+                true
+            }
+            _ => {
+                //Nothing
+                false
+            }
+        }
+    }
+}
 
 fn main() -> BoxedRes<()> {
     enable_raw_mode()?;
@@ -174,50 +363,11 @@ fn main() -> BoxedRes<()> {
         })?;
     }
 
-    let mut must_draw = true;
-    let ps1 = String::from("❯ ");
-    let mut cmd = String::new();
-
-    let cursor_position = Arc::new(Mutex::new(position()?));
-    let cursor_pos = Arc::clone(&cursor_position);
-
-    let print_cmd = move |s: &str| {
-        let mut cursor_position = cursor_pos.lock().unwrap();
-        let mut stdout = stdout();
-        queue!(
-            stdout,
-            MoveTo(cursor_position.0, cursor_position.1),
-            Clear(ClearType::FromCursorDown),
-            Print(&ps1),
-        )
-        .unwrap();
-
-        let term_height = size().unwrap().1;
-        let cursor_height = cursor_position.1;
-        let available_space = term_height - cursor_height;
-
-        for (i, l) in s.split('\n').enumerate() {
-            if i >= available_space as usize {
-                queue!(stdout, ScrollUp(1)).unwrap();
-                cursor_position.1 -= 1;
-            }
-
-            if i > 0 {
-                queue!(stdout, MoveToNextLine(1)).unwrap();
-            }
-            queue!(stdout, Print(l)).unwrap();
-        }
-
-        queue!(stdout, EnableBlinking).unwrap();
-
-        stdout.flush().unwrap();
-    };
+    //let ps1 = String::from("❯ ");
+    let mut cmd = Command::default();
 
     loop {
-        if must_draw {
-            print_cmd(&cmd);
-            must_draw = false;
-        }
+        cmd.draw()?;
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
@@ -225,17 +375,11 @@ fn main() -> BoxedRes<()> {
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                         break;
                     }
-                    (KeyCode::Backspace, m) if m.is_empty() => {
-                        if cmd.len() > 0 {
-                            cmd.remove(cmd.len() - 1);
-                        }
-
-                        must_draw = true;
-                    }
+                    (KeyCode::Backspace, m) if m.is_empty() => cmd.remove_char(),
                     (KeyCode::Char(' '), KeyModifiers::CONTROL) => {
                         print("\n")?;
 
-                        let code = cmd.trim();
+                        let code = cmd.code();
 
                         let mut parser = tree_sitter::Parser::new();
                         parser.set_language(tree_sitter_lua::language())?;
@@ -262,7 +406,7 @@ fn main() -> BoxedRes<()> {
                         *should_tty.lock().unwrap() = print_tty;
 
                         match lua.context::<_, BoxedRes<String>>(|lua_ctx| {
-                            Ok(match lua_ctx.load(&cmd).eval::<rlua::Value>()? {
+                            Ok(match lua_ctx.load(&code).eval::<rlua::Value>()? {
                                 rlua::Value::UserData(data) => match data.borrow::<TableRes>() {
                                     Ok(table) => {
                                         disable_raw_mode()?;
@@ -317,32 +461,38 @@ fn main() -> BoxedRes<()> {
                             Ok(res) => {
                                 print(&res)?;
                                 print("\n")?;
-
-                                *cursor_position.lock().unwrap() = position()?;
-                                cmd = String::new();
-                                must_draw = true;
+                                cmd = Command::default();
                             }
                             Err(e) => {
                                 print(&e.to_string())?;
                                 print("\n")?;
-                                must_draw = true;
+                                cmd.reset_cursor_initial();
                             }
                         }
                     }
-                    (KeyCode::Enter, m) if m.is_empty() => {
-                        cmd.push('\n');
-
-                        must_draw = true;
+                    (KeyCode::Left, m) if m.is_empty() => {
+                        cmd.left();
                     }
-                    (KeyCode::Char(c), _) => {
-                        cmd.push(if modifiers == KeyModifiers::SHIFT {
-                            c.to_uppercase().next().unwrap()
-                        } else {
-                            c
-                        });
-
-                        must_draw = true;
+                    (KeyCode::Right, m) if m.is_empty() => {
+                        cmd.right(false);
                     }
+                    (KeyCode::Up, m) if m.is_empty() => {
+                        cmd.up();
+                    }
+                    (KeyCode::Down, m) if m.is_empty() => {
+                        cmd.down();
+                    }
+                    (KeyCode::Delete, m) if m.is_empty() => {
+                        if cmd.right(true) {
+                            cmd.remove_char()
+                        }
+                    }
+                    (KeyCode::Enter, m) if m.is_empty() => cmd.add_char('\n'),
+                    (KeyCode::Char(c), _) => cmd.add_char(if modifiers == KeyModifiers::SHIFT {
+                        c.to_uppercase().next().unwrap()
+                    } else {
+                        c
+                    }),
                     _ => {}
                 },
                 _ => {}
