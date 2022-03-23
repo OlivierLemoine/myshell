@@ -116,23 +116,12 @@ pub fn ls(dir: &str) -> TableRes {
     }
 }
 
-pub fn cd(dir: &str) -> TableRes {
+pub fn cd(dir: &str) {
     if let Some(path) = if dir.is_empty() {
         home::home_dir().or_else(|| env::current_dir().ok())
     } else {
         PathBuf::from_str(dir).ok()
     } {
         env::set_current_dir(&path).unwrap();
-
-        TableRes {
-            header: vec!["dir".to_string()],
-            entries: vec![vec![env::current_dir()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string()]],
-        }
-    } else {
-        TableRes::default()
     }
 }

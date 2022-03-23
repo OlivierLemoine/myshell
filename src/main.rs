@@ -17,7 +17,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
 use is_executable::IsExecutable;
-use rlua::{Lua, ToLua, Variadic};
+use rlua::{Lua, Variadic};
 
 fn print(s: &str) -> BoxedRes<()> {
     let mut stdout = stdout();
@@ -271,9 +271,9 @@ fn main() -> BoxedRes<()> {
                                         let mut cmd = process::Command::new(&path);
                                         cmd.args(args.iter().collect::<Vec<_>>());
 
-                                        let should_tty = *should_tty.lock().unwrap();
+                                        let should_tty_lock = *should_tty.lock().unwrap();
 
-                                        if should_tty {
+                                        if should_tty_lock {
                                             disable_raw_mode().unwrap();
                                             cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
                                         } else {
@@ -283,33 +283,33 @@ fn main() -> BoxedRes<()> {
                                         let output =
                                             cmd.spawn().unwrap().wait_with_output().unwrap();
 
-                                        Ok(if !should_tty {
-                                            TableRes {
-                                                header: vec![
-                                                    "path".to_string(),
-                                                    "code".to_string(),
-                                                    "stdout".to_string(),
-                                                    "stderr".to_string(),
-                                                ],
-                                                entries: vec![vec![
-                                                    path.to_str().unwrap().to_string(),
-                                                    output.status.code().unwrap_or(-1).to_string(),
+                                        let table = lua_ctx.create_table()?;
+                                        table.set("code", output.status.code())?;
+                                        table.set("path", path.to_str().unwrap().to_string())?;
+                                        match should_tty_lock {
+                                            true => {
+                                                enable_raw_mode().unwrap();
+                                                *should_tty.lock().unwrap() = false;
+                                            }
+                                            false => {
+                                                table.set(
+                                                    "stdout",
                                                     std::str::from_utf8(&output.stdout)
                                                         .unwrap()
                                                         .trim()
                                                         .to_string(),
+                                                )?;
+                                                table.set(
+                                                    "stderr",
                                                     std::str::from_utf8(&output.stderr)
                                                         .unwrap()
                                                         .trim()
                                                         .to_string(),
-                                                ]],
+                                                )?;
                                             }
-                                            .to_lua(lua_ctx)
-                                            .unwrap()
-                                        } else {
-                                            enable_raw_mode().unwrap();
-                                            rlua::Value::Nil
-                                        })
+                                        }
+
+                                        Ok(table)
                                     },
                                 )?;
                                 globals.set(name, call_fn)?;
@@ -347,11 +347,14 @@ fn main() -> BoxedRes<()> {
 
         lua_ctx
             .load(
-                "function print(...)
+                r#"function print(...)
                     for i = 1, select('#', ...) do
                         __internal_print(tostring(select(i, ...)))
                     end
-                end",
+                end
+
+                config = { ps1 = function() return "$ " end }
+                "#,
             )
             .exec()
             .unwrap();
@@ -365,13 +368,6 @@ fn main() -> BoxedRes<()> {
     });
     if let Some(init_code) = init_code_path.and_then(|p| fs::read_to_string(p).ok()) {
         lua.context::<_, BoxedRes<()>>(|lua_ctx| {
-            lua_ctx
-                .load(
-                    r#"config = {
-                    ps1 = function() return "$ " end
-                }"#,
-                )
-                .exec()?;
             lua_ctx.load(&init_code).exec()?;
             Ok(())
         })?;
@@ -483,6 +479,8 @@ fn main() -> BoxedRes<()> {
                                 cmd.reset_cursor_initial();
                             }
                         }
+
+                        *should_tty.lock().unwrap() = false;
                     }
                     (KeyCode::Left, m) if m.is_empty() => {
                         cmd.left();
