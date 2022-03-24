@@ -344,6 +344,8 @@ fn main() -> BoxedRes<()> {
         })?;
         globals.set("cd", cd)?;
 
+        //let pipe = lua_ctx.create_function(|lua_ctx, |)
+
         let print = lua_ctx.create_function(|_, s: String| {
             print(&s).unwrap();
             Ok(())
@@ -355,6 +357,16 @@ fn main() -> BoxedRes<()> {
                 r#"function print(...)
                     for i = 1, select('#', ...) do
                         __internal_print(tostring(select(i, ...)))
+                    end
+                end
+
+                function c(fn, ...)
+                    local args = table.pack(...)
+                    return function(...)
+                        for idx = 1, select('#', ...) do
+                            table.insert(args, select(idx, ...))
+                        end
+                        return fn(table.unpack(args))
                     end
                 end
 

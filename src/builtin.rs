@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, env, fmt, fs, path::PathBuf, str::FromStr, vec};
 
 use prettytable::{Cell, Row};
-use rlua::{MetaMethod, ToLua, UserData};
+use rlua::{Lua, MetaMethod, ToLua, UserData};
 
 #[derive(Debug, Default, Clone)]
 pub struct TableRes {
@@ -125,3 +125,5 @@ pub fn cd(dir: &str) {
         env::set_current_dir(&path).unwrap();
     }
 }
+
+//pub fn pipe(lua: &Lua, )
