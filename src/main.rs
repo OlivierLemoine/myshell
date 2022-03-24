@@ -51,35 +51,42 @@ struct Command {
     cursor_initial: (u16, u16),
     cursor: (usize, usize),
     redraw: bool,
-    ps1: String,
 }
-impl Default for Command {
-    fn default() -> Self {
+impl Command {
+    fn new(lua: &Lua) -> Self {
+        let ps1 = lua
+            .context(|lua_ctx| {
+                let globals = lua_ctx.globals();
+                let config = globals.get::<_, rlua::Table>("config")?;
+                let ps1 = config.get::<_, rlua::Function>("ps1")?;
+                ps1.call::<_, String>(())
+            })
+            .unwrap();
+        print(&ps1).unwrap();
+
         Command {
             cmd: vec![String::new()],
             cursor_initial: position().unwrap(),
             cursor: (0, 0),
             redraw: true,
-            ps1: "$ ".to_string(),
         }
     }
-}
-impl Command {
-    fn draw(&mut self, lua: &Lua) -> BoxedRes<()> {
-        if self.redraw {
-            self.ps1 = lua.context(|lua_ctx| {
-                let globals = lua_ctx.globals();
-                let config = globals.get::<_, rlua::Table>("config")?;
-                let ps1 = config.get::<_, rlua::Function>("ps1")?;
-                ps1.call::<_, String>(())
-            })?;
 
+    fn new_from(old: Self, lua: &Lua) -> Self {
+        let mut command = Command::new(lua);
+        command.cmd = old.cmd;
+        command.cursor = old.cursor;
+        command.redraw = true;
+        command
+    }
+
+    fn draw(&mut self) -> BoxedRes<()> {
+        if self.redraw {
             let mut stdout = stdout();
             queue!(
                 stdout,
                 MoveTo(self.cursor_initial.0, self.cursor_initial.1),
                 Clear(ClearType::FromCursorDown),
-                Print(&self.ps1),
             )?;
 
             let mut after_ps1 = position()?;
@@ -121,11 +128,6 @@ impl Command {
         }
 
         Ok(())
-    }
-
-    fn reset_cursor_initial(&mut self) {
-        self.cursor_initial = position().unwrap();
-        self.redraw = true;
     }
 
     fn code(&self) -> String {
@@ -373,11 +375,10 @@ fn main() -> BoxedRes<()> {
         })?;
     }
 
-    //let ps1 = String::from("❯ ");
-    let mut cmd = Command::default();
+    let mut cmd = Command::new(&lua);
 
     loop {
-        cmd.draw(&lua)?;
+        cmd.draw()?;
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
@@ -469,18 +470,18 @@ fn main() -> BoxedRes<()> {
                             })
                         }) {
                             Ok(res) => {
+                                *should_tty.lock().unwrap() = false;
                                 print(&res)?;
                                 print("\n")?;
-                                cmd = Command::default();
+                                cmd = Command::new(&lua);
                             }
                             Err(e) => {
+                                *should_tty.lock().unwrap() = false;
                                 print(&e.to_string())?;
                                 print("\n")?;
-                                cmd.reset_cursor_initial();
+                                cmd = Command::new_from(cmd, &lua);
                             }
                         }
-
-                        *should_tty.lock().unwrap() = false;
                     }
                     (KeyCode::Left, m) if m.is_empty() => {
                         cmd.left();
