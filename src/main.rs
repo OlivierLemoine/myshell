@@ -17,7 +17,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, ScrollUp},
 };
 use is_executable::IsExecutable;
-use rlua::{Lua, Variadic};
+use rlua::{Lua, ToLua, Variadic};
 
 fn print(s: &str) -> BoxedRes<()> {
     let mut stdout = stdout();
@@ -285,15 +285,19 @@ fn main() -> BoxedRes<()> {
                                         let output =
                                             cmd.spawn().unwrap().wait_with_output().unwrap();
 
-                                        let table = lua_ctx.create_table()?;
-                                        table.set("code", output.status.code())?;
-                                        table.set("path", path.to_str().unwrap().to_string())?;
                                         match should_tty_lock {
                                             true => {
                                                 enable_raw_mode().unwrap();
                                                 *should_tty.lock().unwrap() = false;
+                                                Ok(rlua::Value::Nil)
                                             }
                                             false => {
+                                                let table = lua_ctx.create_table()?;
+                                                table.set("code", output.status.code())?;
+                                                table.set(
+                                                    "path",
+                                                    path.to_str().unwrap().to_string(),
+                                                )?;
                                                 table.set(
                                                     "stdout",
                                                     std::str::from_utf8(&output.stdout)
@@ -308,10 +312,9 @@ fn main() -> BoxedRes<()> {
                                                         .trim()
                                                         .to_string(),
                                                 )?;
+                                                table.to_lua(lua_ctx)
                                             }
                                         }
-
-                                        Ok(table)
                                     },
                                 )?;
                                 globals.set(name, call_fn)?;
@@ -449,6 +452,16 @@ fn main() -> BoxedRes<()> {
                                                     prettytable::Row::new(vec![
                                                         prettytable::Cell::new(k),
                                                         prettytable::Cell::new(v),
+                                                    ])
+                                                })
+                                                .ok(),
+                                            (rlua::Value::String(k), rlua::Value::Integer(s)) => k
+                                                .to_str()
+                                                .and_then(|k| Ok((k, s.to_string())))
+                                                .map(|(k, v)| {
+                                                    prettytable::Row::new(vec![
+                                                        prettytable::Cell::new(k),
+                                                        prettytable::Cell::new(&v),
                                                     ])
                                                 })
                                                 .ok(),
